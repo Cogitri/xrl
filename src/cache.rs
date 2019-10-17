@@ -166,7 +166,15 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
                 0
             };
 
-            let copied_lines = range.filter_map(|i| old_lines.remove_entry(&(i as u64))).map(|(i, mut line)| {
+            // The min value of the old_lines' hash keys.
+            // This is required in order to correctly perform the operation
+            // "remove first 'nb_lines' elements from old_lines".
+            //
+            // (That is, a removal by keys min_index, min_index+1, ...,
+            // min_index+nb_lines).
+            let min_index = *old_lines.keys().min().unwrap();
+
+            let copied_lines = range.filter_map(|i| old_lines.remove_entry(&((i+(min_index as usize)) as u64))).map(|(i, mut line)| {
                 line.line_num = line
                     .line_num
                     .map(|line_num| (line_num as i64 + diff) as u64);
@@ -224,7 +232,16 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
         let nb_valid_lines = old_lines.len();
         if nb_lines < nb_valid_lines as u64 {
             let range = 0..nb_lines;
-            range.map(|i| old_lines.remove(&i)).last();;
+
+            // The min value of the old_lines' hash keys.
+            // This is required in order to correctly perform the operation
+            // "remove first 'nb_lines' elements from old_lines".
+            //
+            // (That is, a removal by keys min_index, min_index+1, ...,
+            // min_index+nb_lines).
+            let min_index = *old_lines.keys().min().unwrap();
+
+            range.map(|i| old_lines.remove(&(i+min_index))).last();
             return;
         } else {
             old_lines.clear();
