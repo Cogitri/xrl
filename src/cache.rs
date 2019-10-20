@@ -231,8 +231,6 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
         // Skip the valid lines
         let nb_valid_lines = old_lines.len();
         if nb_lines < nb_valid_lines as u64 {
-            let range = 0..nb_lines;
-
             // The min value of the old_lines' hash keys.
             // This is required in order to correctly perform the operation
             // "remove first 'nb_lines' elements from old_lines".
@@ -240,8 +238,9 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             // (That is, a removal by keys min_index, min_index+1, ...,
             // min_index+nb_lines).
             let min_index = *old_lines.keys().min().unwrap();
+            let range = min_index..nb_lines + min_index;
 
-            range.map(|i| old_lines.remove(&(i+min_index))).last();
+            range.map(|i| old_lines.remove(&i)).last();
             return;
         } else {
             old_lines.clear();
@@ -304,7 +303,8 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             panic!("failed to update the cache");
         }
 
-        let range = 0..nb_lines;
+        let min_index = *old_lines.keys().min().unwrap();
+        let range = min_index..nb_lines + min_index;
 
         new_lines.extend(
             range
