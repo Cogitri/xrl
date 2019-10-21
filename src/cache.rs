@@ -178,7 +178,7 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
                 line.line_num = line
                     .line_num
                     .map(|line_num| (line_num as i64 + diff) as u64);
-                (i, line)
+                ((i as i64 + diff) as u64, line)
             });
 
             new_lines.extend(copied_lines);
