@@ -181,13 +181,21 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             // The resulting new_lines' keys should form a contiguous sequence.
             // If that is not true, the application should panic at once.
             let min_old_index = *old_lines.keys().min().unwrap();
-            let max_new_index = *new_lines.keys().max().unwrap_or(&0);
+            let max_new_index = new_lines.keys().max();
+
+            // Calculate the position in new_lines to insert into.
+            // Empty new_lines is a special case.
+            let new_index = if let Some(max_new_index) = max_new_index {
+                *max_new_index + 1
+            } else {
+                0
+            };
 
             let copied_lines = range.filter_map(|i| old_lines.remove_entry(&((i+(min_old_index as usize)) as u64))).map(|(i, mut line)| {
                 line.line_num = line
                     .line_num
                     .map(|line_num| (line_num as i64 + ln_diff) as u64);
-                ((i + max_new_index - min_old_index + 1) as u64, line)
+                ((i + new_index - min_old_index) as u64, line)
             });
 
             new_lines.extend(copied_lines);
