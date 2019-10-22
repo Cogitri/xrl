@@ -91,6 +91,9 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             ..
         } = *self;
 
+        // debug/consistency check variable
+        let dbg_new_lines_start_len = new_lines.len();
+
         // The number of lines left to copy
         let mut nb_lines = nb_lines;
 
@@ -145,9 +148,12 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             nb_lines -= nb_valid_lines as u64;
         }
 
+        // debug/consistency check variable
+        let dbg_nb_copied_lines = range.end;
+
         // we'll only apply the copy if there actually are valid lines to copy
         if nb_valid_lines > 0 {
-            let diff = if let Some(new_first_line_num) = first_line_num {
+            let ln_diff = if let Some(new_first_line_num) = first_line_num {
                 // find the first "real" line (ie non-wrapped), and
                 // compute the difference between its line number and
                 // its *new* line number, given by the "copy"
@@ -162,27 +168,44 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
                 new_first_line_num as i64 - num as i64
             } else {
                 // if the "copy" operation does not specify a new line
-                // number, just set the diff to 0
+                // number, just set ln_diff to 0
                 0
             };
 
-            // The min value of the old_lines' hash keys.
-            // This is required in order to correctly perform the operation
-            // "remove first 'nb_lines' elements from old_lines".
+            // min_old_index = The min value of the old_lines' hash keys.
+            // max_new_index = The max value of the new_lines' hash keys.
             //
-            // (That is, a removal by keys min_index, min_index+1, ...,
-            // min_index+nb_lines).
-            let min_index = *old_lines.keys().min().unwrap();
+            // These two values are used as index offsets for the operation
+            // "remove first 'nb_lines' elements from old_lines then append
+            // the extracted lines to the end of new_lines".
+            // The resulting new_lines' keys should form a contiguous sequence.
+            // If that is not true, the application should panic at once.
+            let min_old_index = *old_lines.keys().min().unwrap();
+            let max_new_index = *new_lines.keys().max().unwrap_or(&0);
 
-            let copied_lines = range.filter_map(|i| old_lines.remove_entry(&((i+(min_index as usize)) as u64))).map(|(i, mut line)| {
+            let copied_lines = range.filter_map(|i| old_lines.remove_entry(&((i+(min_old_index as usize)) as u64))).map(|(i, mut line)| {
                 line.line_num = line
                     .line_num
-                    .map(|line_num| (line_num as i64 + diff) as u64);
-                ((i as i64 + diff) as u64, line)
+                    .map(|line_num| (line_num as i64 + ln_diff) as u64);
+                ((i + max_new_index - min_old_index + 1) as u64, line)
             });
 
             new_lines.extend(copied_lines);
 
+            if new_lines.keys().max().unwrap() + 1 - new_lines.keys().min().unwrap()
+                != (new_lines.len() as u64) {
+                panic!(
+                    "unexpected hole in index range after apply_copy: {:?}",
+                    new_lines.keys()
+                );
+            } else if dbg_new_lines_start_len + dbg_nb_copied_lines != new_lines.len() {
+                panic!(
+                    "consistency check failed after apply_copy: {} lines + {} copied lines = {} lines, expected {}",
+                    dbg_new_lines_start_len, dbg_nb_copied_lines,
+                    new_lines.len(),
+                    dbg_new_lines_start_len + dbg_nb_copied_lines
+                );
+            }
         }
 
         // if there are no more lines to copy we're done
@@ -241,6 +264,21 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             let range = min_index..nb_lines + min_index;
 
             range.map(|i| old_lines.remove(&i)).last();
+
+            if old_lines.keys().max().unwrap() + 1 - old_lines.keys().min().unwrap()
+                != (old_lines.len() as u64) {
+                    panic!(
+                        "unexpected hole in index range after apply_skip: {:?}",
+                        old_lines.keys()
+                    );
+                } else if nb_valid_lines as u64 - nb_lines != old_lines.len() as u64 {
+                    panic!(
+                        "consistency check failed after apply_skip: {} lines - {} skipped lines = {} lines, expected {}",
+                        nb_valid_lines, nb_lines, old_lines.len(),
+                        nb_valid_lines as u64 - nb_lines
+                    );
+                }
+
             return;
         } else {
             old_lines.clear();
@@ -271,20 +309,34 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
 
     fn apply_insert(&mut self, mut lines: Vec<Line>) {
         debug!("inserting {} lines", lines.len());
+
+        let UpdateHelper {
+            ref mut new_lines,
+            ..
+        } = *self;
+
         // We need to insert at last line +1, but we still want to start counting from 0
         // for the first line.
-        let mut last_line: i64 = if let Some(num) = self.new_lines.keys().max() {
+        let mut last_line: i64 = if let Some(num) = new_lines.keys().max() {
             *num as i64
         } else {
             -1
         };
 
-        self.new_lines.extend(lines.drain(..).map(|mut line| {
+        new_lines.extend(lines.drain(..).map(|mut line| {
             trim_new_line(&mut line.text);
             last_line += 1;
             let ret = (last_line as u64, line);
             ret
         }));
+
+        if new_lines.keys().max().unwrap() + 1 - new_lines.keys().min().unwrap()
+            != (new_lines.len() as u64) {
+            panic!(
+                "unexpected hole in index range after apply_insert: {:?}",
+                new_lines.keys()
+            );
+            }
     }
 
     fn apply_update(&mut self, nb_lines: u64, lines: Vec<Line>) {
