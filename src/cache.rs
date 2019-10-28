@@ -28,8 +28,14 @@ impl LineCache {
     }
 
     pub fn get_line(&self, n: u64) -> Option<&Line> {
-        self.lines.get(&n)
+        if n < self.invalid_before || n > self.invalid_before + self.lines.len() as u64 {
+            None
+        } else {
+            self.lines.get(&(n - self.invalid_before))
+        }
+
     }
+
     /// Retrieve all lines in the cache.
     pub fn lines(&self) -> &HashMap<u64, Line> {
         &self.lines
@@ -47,6 +53,7 @@ impl LineCache {
             "operations to be applied to the line cache: {:?}",
             &update.operations
         );
+
         let LineCache {
             ref mut lines,
             ref mut invalid_before,
@@ -178,7 +185,8 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
             // These two values are used as index offsets for the operation
             // "remove first 'nb_lines' elements from old_lines then append
             // the extracted lines to the end of new_lines".
-            // The resulting new_lines' keys should form a contiguous sequence.
+            // The resulting new_lines' keys and line numbers should form a
+            // contiguous sequence.
             // If that is not true, the application should panic at once.
             let min_old_index = *old_lines.keys().min().unwrap();
             let max_new_index = new_lines.keys().max();
@@ -200,20 +208,12 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
 
             new_lines.extend(copied_lines);
 
-            if new_lines.keys().max().unwrap() + 1 - new_lines.keys().min().unwrap()
-                != (new_lines.len() as u64) {
-                panic!(
-                    "unexpected hole in index range after apply_copy: {:?}",
-                    new_lines.keys()
-                );
-            } else if dbg_new_lines_start_len + dbg_nb_copied_lines != new_lines.len() {
-                panic!(
-                    "consistency check failed after apply_copy: {} lines + {} copied lines = {} lines, expected {}",
-                    dbg_new_lines_start_len, dbg_nb_copied_lines,
-                    new_lines.len(),
-                    dbg_new_lines_start_len + dbg_nb_copied_lines
-                );
-            }
+            assert_eq!(dbg_new_lines_start_len + dbg_nb_copied_lines,
+                       new_lines.len(),
+                       "consistency check failed after apply_copy: {} lines + {} copied lines = {} lines, expected {}",
+                       dbg_new_lines_start_len, dbg_nb_copied_lines,
+                       new_lines.len(),
+                       dbg_new_lines_start_len + dbg_nb_copied_lines);
         }
 
         // if there are no more lines to copy we're done
@@ -379,12 +379,50 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
     }
 
     fn update(mut self, operations: Vec<Operation>) {
-        trace!("updating the line cache");
-        trace!("cache state before: {:?}", &self);
-        trace!("operations to be applied: {:?}", &operations);
+        // A helper function for dumping a LineCache struct.
+        fn dump(prefix: &'static str, helper: &UpdateHelper) {
+            debug!("{}: old: invalid {}/{}, size {}, keys {}-{}, values {}-{}",
+                   prefix,
+                   helper.old_invalid_before, helper.old_invalid_after,
+                   helper.old_lines.len(),
+                   helper.old_lines.keys().min().unwrap_or(&0),
+                   helper.old_lines.keys().max().unwrap_or(&0),
+                   helper.old_lines.values().map(|line| line.line_num.unwrap_or(0)).min().unwrap_or(0),
+                   helper.old_lines.values().map(|line| line.line_num.unwrap_or(0)).max().unwrap_or(0));
+            debug!("{}: new: invalid {}/{}, size {}, keys {}-{}, values {}-{}",
+                   prefix,
+                   helper.new_invalid_before, helper.new_invalid_after,
+                   helper.new_lines.len(),
+                   helper.new_lines.keys().min().unwrap_or(&0),
+                   helper.new_lines.keys().max().unwrap_or(&0),
+                   helper.new_lines.values().map(|line| line.line_num.unwrap_or(0)).min().unwrap_or(0),
+                   helper.new_lines.values().map(|line| line.line_num.unwrap_or(0)).max().unwrap_or(0));
+        }
+
+        // A helper function for dumping an Operation struct.
+        fn dump_op(prefix: &'static str, op: &Operation) {
+            let op_name = match &op.operation_type {
+                OperationType::Copy_       => "copy",
+                OperationType::Skip        => "skip",
+                OperationType::Invalidate  => "invalidate",
+                OperationType::Update      => "update",
+                OperationType::Insert      => "ins"
+            };
+
+            debug!("{}: op {}, nb_lines {}, {} values {}-{}",
+                   prefix,
+                   op_name,
+                   op.nb_lines,
+                   op.lines.len(),
+                   op.lines.iter().map(|line| line.line_num.unwrap_or(0)).min().unwrap_or(0),
+                   op.lines.iter().map(|line| line.line_num.unwrap_or(0)).max().unwrap_or(0));
+        }
+
+        debug!("updating the line cache");
+
         for op in operations {
-            debug!("operation: {:?}", &op);
-            debug!("cache helper before operation {:?}", &self);
+            dump("before", &self);
+            dump_op("operation", &op);
             match op.operation_type {
                 OperationType::Copy_ => (&mut self).apply_copy(op.nb_lines, op.line_num),
                 OperationType::Skip => (&mut self).apply_skip(op.nb_lines),
@@ -392,8 +430,21 @@ impl<'a, 'b, 'c> UpdateHelper<'a, 'b, 'c> {
                 OperationType::Insert => (&mut self).apply_insert(op.lines),
                 OperationType::Update => (&mut self).apply_update(op.nb_lines, op.lines),
             }
-            debug!("cache helper after operation {:?}", &self);
+
+            dump("after", &self);
+
+            if !self.new_lines.is_empty() {
+                assert_eq!(self.new_lines.keys().max().unwrap() - self.new_lines.keys().min().unwrap() + 1,
+                           self.new_lines.len() as u64,
+                           "unexpected hole in index range");
+                assert_eq!(self.new_lines.values().map(|line| line.line_num.unwrap()).max().unwrap()
+                           - self.new_lines.values().map(|line| line.line_num.unwrap()).min().unwrap() + 1,
+                           self.new_lines.values().len() as u64,
+                           "unexpected hole in line numbers");
+            }
         }
+
+        debug!("end updating the line cache");
         *self.old_lines = self.new_lines;
         *self.old_invalid_before = self.new_invalid_before;
         *self.old_invalid_after = self.new_invalid_after;
