@@ -27,21 +27,9 @@ impl LineCache {
         self.invalid_after
     }
 
-    /// Retrieve the line with the given number from the cache.
     pub fn get_line(&self, n: u64) -> Option<&Line> {
-        // TODO this is a naive search by value. May want to make use of the
-        // contiguity of the cache lines (HashMap::get(<min of keys...> + n))
-        // for optimization, but need to establish cache contiguity checks
-        // first.
-        self.lines.iter().find_map(|(_,line)| {
-            if Some(n+1) == line.line_num {
-                Some(line)
-            } else {
-                None
-            }
-        })
+        self.lines.get(&n)
     }
-
     /// Retrieve all lines in the cache.
     pub fn lines(&self) -> &HashMap<u64, Line> {
         &self.lines
